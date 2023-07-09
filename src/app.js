@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt'
 import Joi from 'joi'
 import dotenv from 'dotenv'
 import { v4 as uuid } from 'uuid'
+import dayjs from 'dayjs'
 dotenv.config()
 
 const app = express()
@@ -81,6 +82,44 @@ app.post('/', async (req, res) => {
    } catch (error) {
       res.status(500).send(error.message)
    }
+})
+
+app.post('/nova-transacao/:tipo', async (req, res) => {
+   const { value, description } = req.body
+   const { authorization } = req.headers
+   const { tipo: transactionType } = req.params
+
+   if (!authorization) return res.sendStatus(401)
+   
+   const transaction = {
+      date: dayjs().format('DD/MM'),
+      value: Number.parseFloat(value.replace(',', '.')).toFixed(2),
+      description,
+      transactionType
+   }
+
+   const schemaTransaction = Joi.object({
+      value: Joi.number().positive(),
+      description: Joi.string().required()
+   })
+
+   const validate = schemaTransaction.validate({value: transaction.value, description: transaction.description}, { abortEarly: false })
+
+   if (validate.error) {
+      const errors = validate.error.details.map((detail) => detail.message)
+      res.status(422).send(errors)
+   }
+
+   try {
+      const { userID } = await db.collection('sessions').findOne({token: authorization})
+      transaction.userID = userID
+      await db.collection('transactions').insertOne(transaction)
+      
+      res.status(200).send(transaction)
+   } catch (error) {
+      res.status(500).send(error.message)
+   }
+
 })
 
 const PORT = 5000
