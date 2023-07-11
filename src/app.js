@@ -12,7 +12,7 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-const mongoClient = new MongoClient(process.env.DATABASE_URL, { family: 4 })
+const mongoClient = new MongoClient(process.env.DATABASE_URL)
 let db
 
 mongoClient
@@ -86,11 +86,12 @@ app.post('/', async (req, res) => {
 
 app.post('/nova-transacao/:tipo', async (req, res) => {
    const { value, description } = req.body
-   const { authorization } = req.headers
+   let { authorization } = req.headers
+   authorization = authorization?.replace('Bearer ', '')
    const { tipo: transactionType } = req.params
 
    if (!authorization) return res.sendStatus(401)
-   
+
    const transaction = {
       date: dayjs().format('DD/MM'),
       value: Number.parseFloat(value.replace(',', '.')).toFixed(2),
@@ -103,24 +104,71 @@ app.post('/nova-transacao/:tipo', async (req, res) => {
       description: Joi.string().required()
    })
 
-   const validate = schemaTransaction.validate({value: transaction.value, description: transaction.description}, { abortEarly: false })
+   const validate = schemaTransaction.validate(
+      { value: transaction.value, description: transaction.description },
+      { abortEarly: false }
+   )
+
+   if (value == 0) return res.status(422).send('Digite um valor maior que R$ 0.')
 
    if (validate.error) {
       const errors = validate.error.details.map((detail) => detail.message)
-      res.status(422).send(errors)
+      return res.status(422).send(errors)
    }
 
    try {
-      const { userID } = await db.collection('sessions').findOne({token: authorization})
-      transaction.userID = userID
+      const user = await db.collection('sessions').findOne({ token: authorization })
+      if (!user) return res.sendStatus(422)
+
+      transaction.userID = user.userID
       await db.collection('transactions').insertOne(transaction)
-      
+
       res.status(200).send(transaction)
    } catch (error) {
       res.status(500).send(error.message)
    }
-
 })
 
-const PORT = 5000
+app.get('/home', async (req, res) => {
+   let { authorization } = req.headers
+   authorization = authorization?.replace('Bearer ', '')
+
+   if (!authorization) return res.sendStatus(401)
+
+   try {
+      const user = await db.collection('sessions').findOne({ token: authorization })
+      if (!user) return res.sendStatus(422)
+
+      const transactionsUser = await db
+         .collection('transactions')
+         .find({ userID: user.userID })
+         .toArray()
+
+      const { name } = await db.collection('users').findOne({ _id: user.userID })
+
+      res.status(200).send({ name, transactionsUser })
+   } catch (error) {
+      res.status(500).send(error.message)
+   }
+
+   //2 - Filtrar transactions pelo userID
+})
+
+app.get('/session', async (req, res) => {
+   let { authorization } = req.headers
+   authorization = authorization?.replace('Bearer ', '')
+
+   if (!authorization) return res.sendStatus(401)
+
+   try {
+      const { userID } = await db.collection('sessions').findOne({ token: authorization })
+      if (!userID) return res.sendStatus(422)
+
+      res.sendStatus(200)
+   } catch (error) {
+      res.sendStatus(500)
+   }
+})
+
+const PORT = process.env.PORT || 5000
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`))
